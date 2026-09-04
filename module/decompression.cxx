@@ -1,4 +1,5 @@
 #include "decompression.hxx"
+#include "oep.hxx"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -671,5 +672,6 @@ auto unpack_pe( const std::vector< std::uint8_t >& packed ) -> std::vector< std:
         }
     }
 
+    apply_oep( image, find_oep( image, pe.magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC ) );
     return image;
 }

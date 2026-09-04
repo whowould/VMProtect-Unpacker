@@ -1,4 +1,5 @@
 #include "iat.hxx"
+#include "oep.hxx"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -683,5 +684,6 @@ auto rebuild_iat( runtime_image& img ) -> std::vector< std::uint8_t >
     write_u32( out.data( ) + nh + 16, extra_raw );
     write_u32( out.data( ) + nh + 20, extra_raw_off );
     write_u32( out.data( ) + nh + 36, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE );
+    apply_oep( out, find_oep( img.bytes, img.is64 ) );
     return out;
 }

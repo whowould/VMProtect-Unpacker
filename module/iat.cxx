@@ -1,5 +1,6 @@
 #include "iat.hxx"
 #include "oep.hxx"
+#include "vmp.hxx"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -141,6 +142,7 @@ namespace
 
     struct sec
     {
+        char name[ 9 ];
         std::uint32_t va;
         std::uint32_t vsize;
         std::uint32_t raw;
@@ -158,6 +160,7 @@ namespace
             if ( off + k_section_hdr > img.size( ) )
                 throw std::runtime_error( "truncated section table" );
             sec s{};
+            std::memcpy( s.name, img.data( ) + off, 8 );
             s.vsize = read_u32( img.data( ) + off + 8 );
             s.va = read_u32( img.data( ) + off + 12 );
             s.raw_size = read_u32( img.data( ) + off + 16 );
@@ -314,6 +317,8 @@ namespace
         {
             if ( !( s.ch & IMAGE_SCN_MEM_EXECUTE ) )
                 continue;
+            if ( is_vm_section_name( s.name ) )
+                continue;
             const auto begin = s.va;
             const auto span = mapped( s );
             if ( !span || begin >= n )
@@ -444,7 +449,8 @@ auto rebuild_iat( runtime_image& img ) -> std::vector< std::uint8_t >
     auto secs = read_sections( img.bytes, p );
     const auto idx = index_exports( img );
     const auto pointers = find_pointers( img, secs, idx );
-    if ( pointers.empty( ) )
+    const auto stubs = recover_vm_stubs( img );
+    if ( pointers.empty( ) && stubs.empty( ) )
         throw std::runtime_error( "no recovered imports are available" );
 
     std::map< std::uint64_t, recovered > slots;
@@ -477,6 +483,15 @@ auto rebuild_iat( runtime_image& img ) -> std::vector< std::uint8_t >
     {
         for ( const auto& pt : pointers )
             add_imp( pt.imp );
+    }
+    for ( const auto& st : stubs )
+    {
+        recovered rec{};
+        rec.module = st.module;
+        rec.name = st.name;
+        rec.ordinal = st.ordinal;
+        rec.dest = st.dest;
+        add_imp( rec );
     }
 
     std::map< std::string, std::vector< recovered > > by_mod;
@@ -610,6 +625,7 @@ auto rebuild_iat( runtime_image& img ) -> std::vector< std::uint8_t >
         if ( static_cast< std::size_t >( r.insn_rva ) + r.disp_off + 4 <= img.bytes.size( ) )
             write_u32( img.bytes.data( ) + r.insn_rva + r.disp_off, bits );
     }
+    apply_vm_stubs( img, stubs, dest_to_iat );
 
     const auto extra_vsize = static_cast< std::uint32_t >( extra.size( ) );
     const auto extra_raw = align_up( extra_vsize, p.file_align );
@@ -647,7 +663,7 @@ auto rebuild_iat( runtime_image& img ) -> std::vector< std::uint8_t >
     std::memcpy( out.data( ) + extra_raw_off, extra.data( ), extra.size( ) );
 
     write_u16( out.data( ) + p.file + 2, static_cast< std::uint16_t >( p.section_count + 1 ) );
-    write_u16( out.data( ) + p.file + 18, static_cast< std::uint16_t >( p.characteristics & ~IMAGE_FILE_RELOCS_STRIPPED ) );
+    write_u16( out.data( ) + p.file + 18, static_cast< std::uint16_t >( p.characteristics | IMAGE_FILE_RELOCS_STRIPPED ) );
     if ( img.is64 )
         write_u64( out.data( ) + p.opt + 24, img.base );
     else
@@ -656,6 +672,7 @@ auto rebuild_iat( runtime_image& img ) -> std::vector< std::uint8_t >
     write_u32( out.data( ) + p.opt + 56, align_up( new_va + extra_vsize, p.section_align ) );
     write_u32( out.data( ) + p.opt + 60, size_of_headers );
     write_u32( out.data( ) + p.opt + 64, 0 );
+    write_u16( out.data( ) + p.opt + 70, static_cast< std::uint16_t >( read_u16( out.data( ) + p.opt + 70 ) & ~IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE ) );
 
     auto write_dir = [ & ]( std::size_t i, std::uint32_t rva, std::uint32_t sz )
     {
@@ -666,6 +683,8 @@ auto rebuild_iat( runtime_image& img ) -> std::vector< std::uint8_t >
     write_dir( IMAGE_DIRECTORY_ENTRY_IAT, iat_rva, iat_size );
     write_dir( IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT, 0, 0 );
     write_dir( IMAGE_DIRECTORY_ENTRY_SECURITY, 0, 0 );
+    write_dir( IMAGE_DIRECTORY_ENTRY_BASERELOC, 0, 0 );
+    write_dir( IMAGE_DIRECTORY_ENTRY_TLS, 0, 0 );
 
     for ( std::size_t i = 0; i < secs.size( ); ++i )
     {

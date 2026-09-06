@@ -1,4 +1,5 @@
 #include "decompression2.hxx"
+#include "vmp.hxx"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -360,18 +361,22 @@ auto dump_runtime( const char* packed_path, std::uint32_t wait_ms ) -> runtime_i
     runtime_image best{};
     std::size_t best_hits = 0;
     const auto t0 = GetTickCount( );
+    auto t_hit = t0;
     do
     {
         try
         {
             auto img = capture( pi.hProcess, pi.dwProcessId, packed_path );
-            const auto hits = count_resolved_imports( img );
+            const auto hits = count_resolved_imports( img ) + count_vm_stubs( img );
             if ( hits > best_hits )
             {
                 best_hits = hits;
                 best = std::move( img );
+                t_hit = GetTickCount( );
             }
             if ( best_hits >= 32 )
+                break;
+            if ( best_hits && GetTickCount( ) - t_hit >= 2000 )
                 break;
         }
         catch ( ... )
@@ -407,7 +412,7 @@ auto dump_pid( std::uint32_t pid, const char* module_name ) -> runtime_image
     if ( !hp.h )
         throw last_error( "OpenProcess" );
     auto img = capture( hp.h, pid, module_name );
-    if ( !count_resolved_imports( img ) )
+    if ( !count_resolved_imports( img ) && !count_vm_stubs( img ) )
         throw std::runtime_error( "no recovered imports are available" );
     return img;
 }

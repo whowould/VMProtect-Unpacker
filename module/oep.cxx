@@ -1,4 +1,5 @@
 #include "oep.hxx"
+#include "vmp.hxx"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -81,6 +82,10 @@ namespace
             if ( off + 40 > image.size( ) )
                 break;
             if ( !( read_u32( image.data( ) + off + 36 ) & IMAGE_SCN_MEM_EXECUTE ) )
+                continue;
+            char nm[ 9 ]{};
+            std::memcpy( nm, image.data( ) + off, 8 );
+            if ( is_vm_section_name( nm ) )
                 continue;
             const auto va = read_u32( image.data( ) + off + 12 );
             const auto vsize = read_u32( image.data( ) + off + 8 );
